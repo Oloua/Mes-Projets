@@ -1,6 +1,6 @@
 # 📁 Mes Projets
 
-## 🇫🇷 Présentation
+## Présentation
 
 Bienvenue sur mon dépôt 👋
 
