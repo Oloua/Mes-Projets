@@ -1,5 +1,3 @@
-# 📁 Mes Projets
-
 ## Présentation
 
 Bienvenue sur mon dépôt 👋
