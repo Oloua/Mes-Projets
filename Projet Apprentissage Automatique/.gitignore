@@ -1,0 +1,31 @@
+# Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore Jupyter temporary/converted notebooks (if any)
+*\-checkpoint.ipynb
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Editor/IDE files
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Ignore outputs of nbconvert (optional)
+*.nbconvert.ipynb
+inter_subject_boxplot.png

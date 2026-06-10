@@ -1,0 +1,205 @@
+# -*- coding: utf-8 -*-
+import time
+import cv2
+import torch
+import numpy as np
+from flask import Flask, Response, jsonify
+from flask_cors import CORS
+
+# --- IMPORTS MATERIEL ---
+from gpiozero import AngularServo, LED, Device
+from gpiozero.pins.lgpio import LGPIOFactory
+
+# --- IMPORTS IA LOCAUX ---
+from blazeface import BlazeFace
+from box_fusion import weighted_box_fusion
+
+# --- IMPORT CAMERA NATIF (PI 5) ---
+# Maintenant ca va marcher grace a --system-site-packages
+from picamera2 import Picamera2
+
+# ================= CONFIGURATION =================
+Device.pin_factory = LGPIOFactory()
+led = LED(27)
+servo = AngularServo(17, min_angle=-90, max_angle=90)
+
+app = Flask(__name__)
+CORS(app)
+
+# ================= IA =================
+print("Chargement IA...")
+DEVICE = "cpu"
+# Assure-toi que ces fichiers sont bien la
+WEIGHTS_PATH = "best_front.pth"
+ANCHORS_PATH = "anchors.npy"
+
+try:
+    model = BlazeFace(back_model=False).to(DEVICE)
+    model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=DEVICE))
+    model.load_anchors(ANCHORS_PATH)
+    model.eval()
+    print("IA OK !")
+except Exception as e:
+    print(f"Erreur IA (Verifie tes fichiers): {e}")
+
+# ================= CAMERA (Picamera2) =================
+print("Demarrage Picamera2...")
+try:
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(
+        # je dois essayer 1280, 720
+        main={"size": (640, 480), "format": "RGB888"}
+    )
+    picam2.configure(config)
+    picam2.start()
+    print("Camera OK !")
+except Exception as e:
+    print(f"Erreur Camera: {e}")
+
+# ================= ETAT =================
+door_state = "FERMEE"
+auto_mode = False
+
+# ================= LOGIQUE IA =================
+
+
+def detect(frame):
+    # Resize 128x128 pour le modele
+    img_in = cv2.resize(frame, (128, 128))
+    # Normalisation
+    x = torch.from_numpy(img_in).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+
+    with torch.no_grad():
+        raw_boxes, raw_scores = model(x)
+        scores = torch.sigmoid(raw_scores.squeeze(0).squeeze(-1))
+        boxes = model._decode_boxes(raw_boxes.squeeze(0), model.anchors)[:, :4]
+
+        keep = scores >= 0.85
+        boxes = boxes[keep]
+        scores = scores[keep]
+
+        if len(scores) == 0:
+            return [], []
+
+        # Weighted Box Fusion
+        b, s = weighted_box_fusion(boxes.numpy(), scores.numpy())
+        return b, s
+
+# ================= STREAMING =================
+
+
+def gen():
+    global door_state
+    last_action = 0
+
+    # variables pour calculer fps
+    prev_frame_time = 0
+    new_frame_time = 0
+
+    while True:
+        try:
+            # Calcul fps
+            new_frame_time = time.time()
+            fps = 1 / (new_frame_time -
+                       prev_frame_time) if prev_frame_time > 0 else 0
+            prev_frame_time = new_frame_time
+
+            # Capture ultra-rapide (Array numpy direct)
+            frame_rgb = picam2.capture_array()
+
+            # Detection
+            boxes, scores = detect(frame_rgb)
+
+            # Dessin (RGB -> BGR pour affichage Web correct avec OpenCV)
+            frame_bgr = frame_rgb
+            h, w = frame_bgr.shape[:2]
+
+            # affichage du fps sur l'ecran
+            cv2.putText(frame_bgr, f"FPS: {int(fps)}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            chicken_detected = len(scores) > 0
+
+            if chicken_detected:
+                for b, s in zip(boxes, scores):
+                    ymin, xmin, ymax, xmax = b
+                    # Conversion coordonnes normalisees -> pixels
+                    x1, y1 = int(xmin * w), int(ymin * h)
+                    x2, y2 = int(xmax * w), int(ymax * h)
+
+                    cv2.rectangle(
+                        frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame_bgr, f"Poule: {s:.2f}", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # LOGIQUE AUTO
+            if auto_mode and chicken_detected and door_state == "FERMEE":
+                now = time.time()
+                if now - last_action > 3:
+                    print("[AUTO] POULE VUE -> OUVERTURE")
+                    servo.angle = 90
+                    led.on()
+                    time.sleep(0.5)
+                    servo.detach()
+                    door_state = "OUVERTE"
+                    last_action = now
+
+            # Encodage JPEG optimise
+            # 50 pour augmenter la vitesse d'affichage mais image de moins
+            # bonne qualité!!
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 50]
+            _, jpeg = cv2.imencode(".jpg", frame_bgr, encode_param)
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n")
+
+        except Exception as e:
+            print(f"Erreur flux: {e}")
+            time.sleep(0.1)
+
+# ================= ROUTES =================
+
+
+@app.route("/video")
+def video():
+    return Response(
+        gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/status")
+def status():
+    return jsonify({"door_state": door_state, "auto_mode": auto_mode})
+
+
+@app.route("/command/<cmd>")
+def command(cmd):
+    global door_state, auto_mode
+    print(f"Commande recue: {cmd}")
+
+    if cmd == "AUTO_ON":
+        auto_mode = True
+    elif cmd == "AUTO_OFF":
+        auto_mode = False
+
+    elif cmd == "OPEN":
+        if auto_mode:
+            return jsonify({"status": "REFUSE_MODE_AUTO"})
+        servo.angle = 90
+        led.on()
+        time.sleep(0.5)
+        servo.detach()
+        door_state = "OUVERTE"
+
+    elif cmd == "CLOSE":
+        if auto_mode:
+            return jsonify({"status": "REFUSE_MODE_AUTO"})
+        servo.angle = -90
+        led.off()
+        time.sleep(0.5)
+        servo.detach()
+        door_state = "FERMEE"
+
+    return jsonify(
+        {"status": "OK", "door_state": door_state, "auto_mode": auto_mode})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
