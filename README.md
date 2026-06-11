@@ -14,7 +14,7 @@ Les projets présents couvrent notamment :
 - ⚙️ **Développement logiciel & bas niveau** : Python, C/C++, Rust, MATLAB, OpenCV, TensorFlow
 - 🔧 **Électronique & FPGA** : conception de systèmes numériques et prototypage matériel
 
-Chaque dossier correspond à un projet indépendant (ex : *Projet IoT*, *Machine Learning*, *Voiture autonome en Rust*, *Identification faciale*, *Projet de fin d’études AI-in-Colibry-NPU*, *Stage 2025 Exosquelette*, etc.).
+Chaque dossier correspond à un projet indépendant (ex : *Projet IoT*, *Machine Learning*, *Voiture autonome en FreeRTOS*, *Identification faciale*, *Projet de fin d’études AI-in-Colibry-NPU*, *Stage 2025 Exosquelette*, etc.).
 
 Certains fichiers volumineux (datasets, exécutables, environnements virtuels) sont exclus via `.gitignore` afin de garantir un dépôt propre et léger.
 
